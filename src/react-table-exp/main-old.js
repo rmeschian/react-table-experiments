@@ -1,8 +1,5 @@
-import React, {useEffect, useState, useRef, useCallback, useMemo} from 'react';
-import styled from 'styled-components'
-import { useTable, useBlockLayout, useExpanded } from 'react-table'
-import { FixedSizeList } from 'react-window'
-import scrollbarWidth from './scrollbarWidth'
+import React, {useEffect, useState, useRef, useCallback} from 'react'
+import { useTable, useExpanded } from 'react-table'
 import { DndProvider, useDrag, useDrop } from 'react-dnd'
 import { HTML5Backend } from 'react-dnd-html5-backend'
 import update from 'immutability-helper'
@@ -14,29 +11,20 @@ import TableCell from '@material-ui/core/TableCell'
 import TableHead from '@material-ui/core/TableHead'
 import TableRow from '@material-ui/core/TableRow'
 
+import { FixedSizeList } from 'react-window'
+import scrollbarWidth from './scrollbarWidth'
+
+
 import makeData from './makeData'
 
-let dragCount = 0;
+const getRowId = row => {
+  return row.id
+};
 
-function Table({ columns, data }) {
-  // Use the state and functions returned from useTable to build your UI
-
+const Table = ({ columns, data, loadChildren }) => {
   const [records, setRecords] = useState([]);
   const idToRow = useRef({});
   const [isRowLoading, setIsRowLoading] = useState({});
-
-  const handle = useRef();
-  const setRecordsDebounced = useCallback((val) => {
-    cancelAnimationFrame(handle.currrent);
-    handle.current = requestAnimationFrame(() => {
-      debugger;
-      setRecords(val);
-    });
-    // clearTimeout(handle.currrent);
-    // handle.current = setTimeout(() => {
-    //   setRecords(val);
-    // });
-  }, []);
 
   useEffect(() => {
     if(records !== data) {
@@ -58,60 +46,41 @@ function Table({ columns, data }) {
     });
   }, []);
 
-  const defaultColumn = React.useMemo(
-    () => ({
-      width: 150,
-    }),
-    []
-  )
-
-  const scrollBarSize = useMemo(() => scrollbarWidth(), [])
-
   const {
     getTableProps,
     getTableBodyProps,
     headerGroups,
     rows,
     prepareRow,
-    totalColumnsWidth,
-
     state: { expanded },
     toggleRowExpanded
-  } = useTable(
-    {
-      columns,
-      data: records,
-      defaultColumn,
-      autoResetExpanded: false,
-      getRowId
-    },
-    useBlockLayout,
-    useExpanded // Use the useExpanded plugin hook
+  } = useTable({
+    data: records,
+    columns,
+    autoResetExpanded: false,
+    getRowId,
+    isRowLoading
+  },
+  useExpanded // Use the useExpanded plugin hook
   );
 
+  const expandRow = async (parentRow) => {
+    const parentId = getRowId(parentRow);
+    setIsRowLoading({ [parentId]: true });
+    const childData = await loadChildren(parentRow);
+    setIsRowLoading({ [parentId]: false });
+    if (records) {
+      const p1 = getNestingPathToSplice({
+        records, 
+        idToRow,
+        row: parentRow,
+        createLeaf: (i) => ({ [i]: { subRows: {$set : childData }} })
+      });
+      setRecords(update(records, p1));
+    }
+  }
 
-  const expandRow = useCallback(async (parentRow) => {
-    // const parentId = getRowId(parentRow);
-    // setIsRowLoading({ ...isRowLoading, [parentId]: true });
-    // const childData = await loadChildren(parentRow);
-    // setIsRowLoading({ ...isRowLoading, [parentId]: false });
-    // if (records) {
-    //   const p1 = getNestingPathToSplice({
-    //     records, 
-    //     idToRow,
-    //     row: parentRow,
-    //     createLeaf: (i) => ({ [i]: { subRows: {$set : childData }} })
-    //   });
-    //   setRecords(update(records, p1));
-    // }
-  }, [records, isRowLoading]);
-
-  
-  const moveRow = useCallback((id, afterId) => {
-    dragCount++;
-    // if(dragCount > 1)
-    //   return;
-debugger;
+  const moveRow = (id, afterId) => {
     const row = idToRow.current[id];
     const afterRow = idToRow.current[afterId];
 
@@ -141,68 +110,54 @@ debugger;
 
     const u1 = update(records, p1);
     const u2 = update(u1, p2);
-    debugger;
-    setRecordsDebounced(u2)
-  }, [idToRow, records]);
 
-  const RenderRow = useCallback(({ index, style }) => {
-      const row = rows[index];
-      prepareRow(row);
+    setRecords(u2);
+  };
 
-      return <Row 
-        row={row}
-        index={index}
-        style={style}
-        moveRow={moveRow}
-        toggleRowExpanded={toggleRowExpanded}
-        expandRow={expandRow}
-        isLoading={isRowLoading[row.id]}
-      />;
-    }, [rows, moveRow, toggleRowExpanded, expandRow, isRowLoading]);
-
-  // Render the UI for your table
   return (
     <DndProvider backend={HTML5Backend}>
-      <MaUTable component="div" {...getTableProps()} className="table">
-        <TableHead component="div">
+      <MaUTable {...getTableProps()} stickyHeader>
+        <TableHead>
           {headerGroups.map(headerGroup => (
-            <TableRow component="div" {...headerGroup.getHeaderGroupProps()} className="tr">
+            <TableRow {...headerGroup.getHeaderGroupProps()}>
+              <TableCell></TableCell>
               {headerGroup.headers.map(column => (
-                <TableCell  component="div" {...column.getHeaderProps()} className="th" variant="head">
-                  {column.render('Header')}
-                </TableCell>
+                <TableCell {...column.getHeaderProps()}>{column.render('Header')}</TableCell>
               ))}
             </TableRow>
           ))}
         </TableHead>
-
-        <TableBody component="div" {...getTableBodyProps()}>
-          <FixedSizeList
-            height={400}
-            itemCount={rows.length}
-            itemSize={55}
-            width={totalColumnsWidth+scrollBarSize}
-          >
-            {RenderRow}
-          </FixedSizeList>
+        <TableBody {...getTableBodyProps()}>
+          {rows.map(
+            (row, index) =>
+              prepareRow(row) || (
+                <Row
+                  row={row}
+                  index={index}
+                  moveRow={moveRow}
+                  {...row.getRowProps()}
+                  toggleRowExpanded={toggleRowExpanded}
+                  expandRow={expandRow}
+                  isLoading={isRowLoading[row.id]}
+                />
+              )
+          )}
         </TableBody>
       </MaUTable>
     </DndProvider>
   )
 }
 
-const DND_ITEM_TYPE = 'row';
+const DND_ITEM_TYPE = 'row'
 
-function Row({
+const Row = ({ 
   row, 
   index, 
   moveRow, 
   toggleRowExpanded, 
   isLoading,
-  expandRow,
-  style
-}) {
-
+  expandRow 
+}) => {
   const rowId = getRowId(row);
   const dropRef = useRef(null)
   const dragRef = useRef(null)
@@ -250,45 +205,35 @@ function Row({
     }
   })
 
-  const opacity = isDragging ? 0 : 1;
-  preview(drop(dropRef));
-  drag(dragRef);
+  const opacity = isDragging ? 0 : 1
+  preview(drop(dropRef))
+  drag(dragRef)
 
   return (
-    <TableRow   
-      ref={dropRef}
-      component="div"
-      {...row.getRowProps({
-        style,
-      })}
-      className="tr"
-    >
-      <TableCell ref={dragRef}  component="div">move</TableCell>
+    <TableRow ref={dropRef} style={{ opacity }}>
+      <TableCell ref={dragRef}>move</TableCell>
       {row.cells.map(cell => {
-        return (
-          <TableCell component="div" {...cell.getCellProps()} className="td">
-            {cell.render('Cell', {
-              isLoading,
-              async onExpandClick(event) {
-                const toggleRowExpandedProps = row.getToggleRowExpandedProps();
-                if (!isLoading) {
-                  if (!row.isExpanded) {
-                    await expandRow(row);
-                  }
-                  toggleRowExpandedProps.onClick(event);
-                }
+        return <TableCell {...cell.getCellProps()}>{cell.render('Cell', {
+          isLoading,
+          async onExpandClick(event) {
+            const toggleRowExpandedProps = row.getToggleRowExpandedProps();
+            if (!isLoading) {
+              if (!row.isExpanded) {
+                await expandRow(row);
               }
-            })
-          }</TableCell>
-        )
-      })}
+              toggleRowExpandedProps.onClick(event);
+            }
+          }
+        })}</TableCell>
+      })}   
     </TableRow>
-  );
+  )
 }
 
-function App() {
-  const columns = React.useMemo(
-    () => [
+// =========================================
+
+const App = () => {
+  const columns = React.useMemo(() => [
       {
         // Build our expander column
         id: 'expander', // Make sure it has an ID
@@ -346,60 +291,64 @@ function App() {
       },
     ],
     []
-  )
+  );
 
-  const data = React.useMemo(() => makeData(100000), [])
+  const data = React.useMemo(() => makeData(20), []);
 
+  const loadChildren = useCallback((parentRow) => {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(makeData(20));
+      }, 2000);
+    });
+  }, []);
+
+  // TODO: Need to pass drag rules, etc here...
   return (
-    <div>
-      <Table columns={columns} data={data} />
-    </div>
-  )
+    <Table columns={columns} data={data} loadChildren={loadChildren} />
+  );
 }
+
 
 // ======================================================
 
-function getRowId(row) {
-  return row.id
-}
-
 function getNestingPathToSplice({
-  records, 
-  row: targetRow, 
-  createLeaf,
-  idToRow
+    records, 
+    row: targetRow, 
+    createLeaf,
+    idToRow
 }) {
-let nesting = undefined;
-const f2 = (row) => {
-  const parentRow = row.__parentId && idToRow.current[row.__parentId];
-  const arr = parentRow ? parentRow.subRows : records;
-  const index = arr.findIndex(a => a.id === row.id);
-  
-  if(!nesting) {
-    nesting = createLeaf(index, parentRow);
-  } else {
-    nesting = {
-      [index]: {
-        subRows: nesting
-      }
-    };
-  }
-  if(parentRow)
-    f2(parentRow);
-};
-f2(targetRow);
-return nesting;
+  let nesting = undefined;
+  const f2 = (row) => {
+    const parentRow = row.__parentId && idToRow.current[row.__parentId];
+    const arr = parentRow ? parentRow.subRows : records;
+    const index = arr.findIndex(a => a.id === row.id);
+    
+    if(!nesting) {
+      nesting = createLeaf(index, parentRow);
+    } else {
+      nesting = {
+        [index]: {
+          subRows: nesting
+        }
+      };
+    }
+    if(parentRow)
+      f2(parentRow);
+  };
+  f2(targetRow);
+  return nesting;
 }
 
 /**
-* Calls the given function with each row in the given data
-*/
+ * Calls the given function with each row in the given data
+ */
 function walkRowTree(data, fn) {
-if(data === undefined)
-  return;
+  if(data === undefined)
+    return;
 
-if(!Array.isArray(data))
-  data = [data];
+  if(!Array.isArray(data))
+    data = [data];
 
   const f = (arr, parentRow) => {
     for(let i = 0; i < arr.length; i++) {
@@ -413,5 +362,6 @@ if(!Array.isArray(data))
   };
   f(data);
 }
+
 
 export default App
